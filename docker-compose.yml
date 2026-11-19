@@ -1,0 +1,47 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: wager
+      POSTGRES_PASSWORD: wager
+      POSTGRES_DB: wager
+    ports:  ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wager"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  localstack:
+    image: localstack/localstack:4.14
+    ports: ["4566:4566"]
+    environment:
+      SERVICES: sqs
+      LOCALSTACK_AUTH: ${LOCALSTACK_AUTH:-}
+    volumes:
+      - ./infra/localstack/init:/etc/localstack/init/ready.d:ro
+    healthcheck:
+      test: ["CMD", "awslocal", "sqs", "get_queue_url", "--queue-name", "wager-events.fifo"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+
+  app:
+    profiles: ["app"]
+    build: .
+    depends_on:
+      postgres: {condition: service_healthy}
+      localstack: {condition: service_healthy}
+    environment:
+      PORT: 3000
+      DATABASE_URL: postgres://wager:wager@postgres:5432/wager
+      AWS_REGION: us-east-1
+      AWS_ENDPOINT_URL: http://localstack:4566
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+    ports: ["3000:3000"]
+    command: sh -c "bun run migration:up && bun run start"
+
+volumes:
+  pgdata:
