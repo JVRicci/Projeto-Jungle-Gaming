@@ -1,7 +1,7 @@
 import { DomainError } from "../shared/domain-error";
 import { Money, type MoneyProps } from "../money/money";
 
-enum LedgerDirection { Debit = "DEBIT", Credit = "CREDIT" }
+export enum LedgerDirection { Debit = "DEBIT", Credit = "CREDIT" }
 
 interface CreateLedgerEntryProps {
     id: string;  
@@ -25,7 +25,7 @@ interface LedgerEntryState {
     createdAt: Date;
 }
 
-class WalletLedgerEntry {
+export class WalletLedgerEntry {
     private constructor(
         public readonly id: string,
         public readonly walletId: string,
@@ -78,6 +78,6 @@ class WalletLedgerEntry {
             ? balanceBefore.subtract(money)
             : balanceBefore.add(money);
             
-            return expectBalance.equals(balanceAfter);
+        return expectBalance.equals(balanceAfter);
     };
 }

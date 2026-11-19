@@ -1,6 +1,7 @@
 import Decimal from "decimal.js";
 import { DomainError } from "../shared/domain-error";
 import { Money, type MoneyProps } from "../money/money";
+import { LedgerDirection, WalletLedgerEntry } from "./wallet_ledger_entry";
 
 interface WalletState {
   id: string;
@@ -12,7 +13,7 @@ interface WalletState {
   updatedAt: Date;
 }
 
-class Wallet {
+export class Wallet {
   private constructor(
     public readonly id: string,
     public readonly playerId: string,
@@ -30,7 +31,7 @@ class Wallet {
   }): Wallet {
     const { id, playerId, initialBalance } = props;
 
-    if ( !id || !playerId) {
+    if (!id || !playerId) {
       throw new DomainError("MISSING_REQUIRED_PLAYER_ID", "Verificação de carteira inválida: id ou playerId ausentes");
     }
 
@@ -68,8 +69,73 @@ class Wallet {
 
   // Aplicam a movimentação mantendo saldo e ledger consistentes entre si.
   // Assinatura e retorno são decisão sua.
-  debit(money: Money): Wallet;
-  credit(money: Money): Wallet;
+  debit(props: {ledgerEntryId: string, transactionId: string, money: Money, at: Date}): WalletLedgerEntry {
+    const {ledgerEntryId, transactionId, money, at} = props;
 
-  private assertSameCurrency(money: Money): void;
+    this.assertSameCurrency(money);
+
+    if(money.isNegative() || money.isZero()){
+      throw new DomainError("INVALID_DEBIT_AMOUNT", "Valor de débito inválido");
+    }
+
+    if(this._balance.isNegative() || this._balance.isZero() || this._balance.isLessThan(money)){
+      throw new DomainError("INSUFFICIENT_FUNDS", "Saldo insuficiente para débito");
+    }
+
+    const balanceBefore = this._balance;
+    const balanceAfter = this._balance.subtract(money);
+
+    const entry = WalletLedgerEntry.create({
+      id: ledgerEntryId,
+      walletId: this.id,
+      transactionId,
+      direction: LedgerDirection.Debit,
+      money,
+      balanceBefore,
+      balanceAfter,
+      createdAt: at,
+    })
+
+    this._balance = balanceAfter;
+    this._version++;
+    this._updatedAt = at;
+
+    return entry
+  };
+
+  credit(props: {ledgerEntryId: string, transactionId: string, money: Money, at: Date}): WalletLedgerEntry{
+    const {ledgerEntryId, transactionId, money, at} = props;
+
+    this.assertSameCurrency(money);
+    
+    if(!money.isPositive()){
+      throw new DomainError("INVALID_CREDIT_AMOUNT", "Valor de crédito deve ser positivo");
+    }
+
+    const balanceBefore = this._balance;
+    const balanceAfter = this._balance.add(money);
+
+    const entry = WalletLedgerEntry.create({
+      id: ledgerEntryId,
+      walletId: this.id,
+      transactionId,
+      direction: LedgerDirection.Credit,
+      money,
+      balanceBefore,
+      balanceAfter,
+      createdAt: at,
+    })
+
+    this._balance = balanceAfter;
+    this._version++;
+    this._updatedAt = at;
+
+    return entry;
+  }
+
+  private assertSameCurrency(money: Money): void{
+    if(this.currency !== money.currency){
+      throw new DomainError("CURRENCY_MISMATCH", `Moeda incompatível: ${money.currency} (esperada: ${this.currency})`);
+    }
+  };
 }
