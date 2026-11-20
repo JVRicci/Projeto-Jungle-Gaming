@@ -1,4 +1,3 @@
-import Decimal from "decimal.js";
 import { DomainError } from "../shared/domain-error";
 import { Money, type MoneyProps } from "../money/money";
 import { LedgerDirection, WalletLedgerEntry } from "./wallet_ledger_entry";
@@ -11,6 +10,13 @@ interface WalletState {
   version: number;
   createdAt: Date;
   updatedAt: Date;
+}
+
+interface TransactionProps {
+  ledgerEntryId: string, 
+  transactionId: string, 
+  money: Money, 
+  at?: Date
 }
 
 export class Wallet {
@@ -31,22 +37,28 @@ export class Wallet {
   }): Wallet {
     const { id, playerId, initialBalance } = props;
 
-    if (!id || !playerId) {
+    if (!initialBalance) {
+      throw new DomainError("INITIAL_BALANCE_INVALID", "O saldo inicial não é válido");
+    }
+
+    if (!id || !playerId || !playerId.trim() || !id.trim()) {
       throw new DomainError("MISSING_REQUIRED_PLAYER_ID", "Verificação de carteira inválida: id ou playerId ausentes");
     }
 
     if (props.initialBalance.isNegative()) {
       throw new DomainError("INITIAL_BALANCE_NEGATIVE", "Saldo inicial não pode ser negativo");
     }
+    
+    const now = new Date()
 
     return new Wallet(
-      props.id,
-      props.playerId,
-      props.initialBalance.currency,
-      props.initialBalance,
+      id,
+      playerId,
+      initialBalance.currency,
+      initialBalance,
       1,
-      new Date(),
-      new Date(),
+      now,
+      now,
     );
   };
 
@@ -56,7 +68,7 @@ export class Wallet {
       state.id,
       state.playerId,
       state.currency,
-      Money.from(state.balance),
+      Money.rehydrate(state.balance),
       state.version,
       new Date(state.createdAt),
       new Date(state.updatedAt),
@@ -69,18 +81,22 @@ export class Wallet {
 
   // Aplicam a movimentação mantendo saldo e ledger consistentes entre si.
   // Assinatura e retorno são decisão sua.
-  debit(props: {ledgerEntryId: string, transactionId: string, money: Money, at: Date}): WalletLedgerEntry {
-    const {ledgerEntryId, transactionId, money, at} = props;
+  debit(props: TransactionProps): WalletLedgerEntry {
+    const {ledgerEntryId, transactionId, money, at = new Date()} = props;
 
-    this.assertSameCurrency(money);
-
-    if(money.isNegative() || money.isZero()){
+    if (!ledgerEntryId || !transactionId) {
+      throw new DomainError("INVALID_ID", "ID da transação ou registro inválido")
+    }
+    
+    if(!money.isPositive()){
       throw new DomainError("INVALID_DEBIT_AMOUNT", "Valor de débito inválido");
     }
-
-    if(this._balance.isNegative() || this._balance.isZero() || this._balance.isLessThan(money)){
+    
+    if(this._balance.isLessThan(money)){
       throw new DomainError("INSUFFICIENT_FUNDS", "Saldo insuficiente para débito");
     }
+    
+    this.assertSameCurrency(money);
 
     const balanceBefore = this._balance;
     const balanceAfter = this._balance.subtract(money);
@@ -103,14 +119,18 @@ export class Wallet {
     return entry
   };
 
-  credit(props: {ledgerEntryId: string, transactionId: string, money: Money, at: Date}): WalletLedgerEntry{
-    const {ledgerEntryId, transactionId, money, at} = props;
-
-    this.assertSameCurrency(money);
+  credit(props: TransactionProps): WalletLedgerEntry{
+    const {ledgerEntryId, transactionId, money, at = new Date()} = props;
+    
+    if (!ledgerEntryId || !transactionId) {
+      throw new DomainError("INVALID_ID", "ID da transação ou registro inválido")
+    }
     
     if(!money.isPositive()){
       throw new DomainError("INVALID_CREDIT_AMOUNT", "Valor de crédito deve ser positivo");
     }
+    
+    this.assertSameCurrency(money);
 
     const balanceBefore = this._balance;
     const balanceAfter = this._balance.add(money);

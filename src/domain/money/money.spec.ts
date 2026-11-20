@@ -35,8 +35,13 @@ describe("Money - Construção", () => {
             expect(() => Money.from({amount: 25 as unknown as string, currency: 'BRL'})).toThrowError(DomainError);
         })
 
-        it.each(['', 'br', 'BRLL', 'brl', '123'])('rejeita moeda inválida %p', (currency) => {
+        it.each(['', 'br', 'BRLL', 'brl', '123', 'ABC'])('rejeita moeda inválida %p', (currency) => {
             expect(() => Money.from({ amount: '1.00', currency })).toThrow(DomainError);
+        });
+
+        it('reidrata Money a partir do estado persistido', () => {
+            const rehydrated = Money.rehydrate({ amount: '100.50', currency: 'BRL' });
+            expect(rehydrated.toJSON()).toEqual({ amount: '100.50', currency: 'BRL' });
         });
     }
 )
@@ -59,8 +64,10 @@ describe('Money — operações', () => {
         expect(r.toJSON().amount).toBe('-0.01');
     });
 
-    it('negate de zero não gera "-0.00"', () => {
+    it('negate inverte sinal e de zero não gera "-0.00"', () => {
         expect(brl('0').negate().toJSON().amount).toBe('0.00');
+        expect(brl('10.00').negate().toJSON().amount).toBe('-10.00');
+        expect(brl('10.00').negate().negate().toJSON().amount).toBe('10.00');
     });
 
     it('isZero, isPositive e isLessThan', () => {
@@ -68,11 +75,21 @@ describe('Money — operações', () => {
         expect(brl('0.01').isPositive()).toBe(true);
         expect(brl('1.00').isLessThan(brl('1.01'))).toBe(true);
         expect(brl('1.01').isLessThan(brl('1.00'))).toBe(false);
+        expect(brl('10.00').isLessThan(brl('10.00'))).toBe(false);
     });
 
     it('equals considera valor e moeda', () => {
         expect(brl('10.00').equals(brl('10'))).toBe(true);
         expect(brl('10.00').equals(usd('10.00'))).toBe(false);
+        expect(brl('10.00').equals(null as unknown as Money)).toBe(false);
+        expect(brl('10.00').equals(undefined as unknown as Money)).toBe(false);
+    });
+
+    it('isZero, isPositive e isNegative com zero', () => {
+        const zero = brl('0.00');
+        expect(zero.isZero()).toBe(true);
+        expect(zero.isPositive()).toBe(false);
+        expect(zero.isNegative()).toBe(false);
     });
 
     it('operações entre moedas diferentes lançam CURRENCY_MISMATCH', () => {
@@ -85,6 +102,12 @@ describe('Money — operações', () => {
         expect(codeOf(() => brl('999999999999999999.99').add(brl('0.01')))).toBe(
         'AMOUNT_OUT_OF_RANGE',
         );
+    });
+
+    it('cria instância zero corretamente', () =>     {
+        const zero = Money.zero('BRL');
+        expect(zero.toJSON()).toEqual({ amount: '0.00', currency: 'BRL'     });
+        expect(zero.isZero()).toBe(true);
     });
 });
 

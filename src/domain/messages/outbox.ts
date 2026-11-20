@@ -1,4 +1,4 @@
-class OutboxMessage {
+export class OutboxMessage {
   private constructor(
     public readonly id: string,
     public readonly aggregateId: string,

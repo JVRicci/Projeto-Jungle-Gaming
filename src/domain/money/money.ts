@@ -6,13 +6,12 @@ export interface MoneyProps {
     currency: string;
 }
 
-const permitted_currency = ["BRL", "USD"]
-
 const D = Decimal.clone({ precision: 40 });
 
 const AMOUNT_INPUT_REGEX = /^\d{1,18}(\.\d{1,2})?$/;
 const CURRENCY_INPUT_REGEX = /^[A-Z]{3}$/;
 const MAX_ABS = new D("999999999999999999.99");
+const SUPPORTED_CURRENCIES = new Set(["BRL", "USD", "EUR"]);
 
 export class Money {
     private constructor(
@@ -26,8 +25,8 @@ export class Money {
         if(typeof amount !== "string" || !AMOUNT_INPUT_REGEX.test(amount))
             throw new DomainError("INVALID_AMOUNT", `Valor inválido: ${amount}` );
         
-        if(typeof currency !== "string" || !CURRENCY_INPUT_REGEX.test(currency))
-            throw new DomainError("INVALID_CURRENCY", `Moeda inválida: ${currency}` );
+        if (typeof currency !== "string" || !CURRENCY_INPUT_REGEX.test(currency) || !SUPPORTED_CURRENCIES.has(currency)) 
+            throw new DomainError("INVALID_CURRENCY", `Moeda inválida ou não suportada: ${currency}`);
         
         return Money.of(new D(amount), currency);
     }
@@ -37,6 +36,10 @@ export class Money {
             throw new DomainError("AMOUNT_OUT_OF_RANGE", `Valor fora do intervalo permitido: ${value.toString()}`);
         }
         return new Money(value, currency);
+    }
+
+    static rehydrate(props: MoneyProps): Money {
+        return Money.of(new D(props.amount), props.currency); 
     }
     
     static zero(currency: string): Money {
@@ -49,17 +52,11 @@ export class Money {
     }
 
     subtract(other: Money): Money {
-        if (this.isNegative() || other.isNegative()) {
-            throw new DomainError("SUBTRACT_NEGATIVE_AMOUNT", "Não é possivel subtrair um valor negativo");
-        }
         this.assertSameCurrency(other);
         return Money.of(this.value.minus(other.value), this.currency);
     }
 
     negate(): Money {
-        if (this.isNegative()) {
-            throw new DomainError("NEGATE_NEGATIVE_AMOUNT", "Não é possível negar um valor negativo");
-        }
         if (this.isZero()) {
             return this;
         }
@@ -71,7 +68,7 @@ export class Money {
     }
 
     isPositive(): boolean {
-        return this.value.isPositive();
+        return this.value.gt(0);
     }
 
     isNegative(): boolean {
@@ -84,6 +81,7 @@ export class Money {
     }
 
     equals(other: Money): boolean {
+        if (!(other instanceof Money) || !other) return false
         return this.currency === other.currency && this.value.equals(other.value);
     }
 

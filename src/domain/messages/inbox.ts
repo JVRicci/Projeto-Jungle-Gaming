@@ -1,4 +1,14 @@
-class InboxMessage {
+
+interface InboxMessageState {
+  
+    messageId: string,
+    consumerName: string,
+    payloadHash: string,
+    receivedAt: Date,
+    _processedAt?: Date,
+}
+
+export class InboxMessage {
   private constructor(
     public readonly messageId: string,
     public readonly consumerName: string,

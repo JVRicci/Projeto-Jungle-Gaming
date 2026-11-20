@@ -11,7 +11,7 @@ interface CreateLedgerEntryProps {
     money: Money;
     balanceBefore: Money;
     balanceAfter: Money;
-    createdAt: Date;
+    createdAt?: Date;
 }
 
 interface LedgerEntryState {
@@ -38,20 +38,26 @@ export class WalletLedgerEntry {
     ) {}
 
     static create(props: CreateLedgerEntryProps): WalletLedgerEntry{
-        const { direction, money, balanceBefore, balanceAfter } = props;
+        const {id, walletId, transactionId, direction, money, balanceBefore, balanceAfter, createdAt = new Date()} = props;
         
+        if(!props.id || !props.walletId || !props.transactionId)
+            throw new DomainError("INVALID_ID", "ID da carteira, transação ou registro inválido")
+        
+        if(!money.isPositive())
+            throw new DomainError("INVALID_LEDGER_AMOUNT", "Valor lançamento inválido ")
+
         const entry = new WalletLedgerEntry(
-            props.id,
-            props.walletId,
-            props.transactionId,
-            props.direction,
-            props.money,
-            props.balanceBefore,
-            props.balanceAfter,
-            props.createdAt
+            id,
+            walletId,
+            transactionId,
+            direction,
+            money,
+            balanceBefore,
+            balanceAfter,
+            createdAt
         );
         
-        if(!entry.isBalanced(props.direction, money, props.balanceBefore, balanceAfter)){
+        if(!entry.isBalanced()){
             throw new DomainError("LEDGER_ENTRY_NOT_BALANCED", "Saldo de lançamento inválido");
         }
 
@@ -64,20 +70,20 @@ export class WalletLedgerEntry {
             state.walletId,
             state.transactionId,
             state.direction,
-            Money.from(state.money),
-            Money.from(state.balanceBefore),
-            Money.from(state.balanceAfter),
+            Money.rehydrate(state.money),
+            Money.rehydrate(state.balanceBefore),
+            Money.rehydrate(state.balanceAfter),
             new Date(state.createdAt)
         );
     };
 
     /** balanceBefore ± money === balanceAfter. Verificada na factory. */
-    isBalanced(direction: LedgerDirection, money: Money, balanceBefore: Money, balanceAfter: Money): boolean {
+    isBalanced(): boolean {
         
-        const expectBalance = direction === LedgerDirection.Debit
-            ? balanceBefore.subtract(money)
-            : balanceBefore.add(money);
+        const expectBalance = this.direction === LedgerDirection.Debit
+            ? this.balanceBefore.subtract(this.money)
+            : this.balanceBefore.add(this.money);
             
-        return expectBalance.equals(balanceAfter);
+        return expectBalance.equals(this.balanceAfter);
     };
 }
