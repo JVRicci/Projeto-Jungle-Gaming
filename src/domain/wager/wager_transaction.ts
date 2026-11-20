@@ -2,7 +2,7 @@ import { Money, type MoneyProps } from "../money/money"
 import { DomainError } from "../shared/domain-error"
 import { LedgerDirection } from "../wallet/wallet_ledger_entry";
 
-enum WagerTransactionKind {
+export enum WagerTransactionKind {
   Opening  = "OPENING",   // interno: crédito de abertura da wallet
   Bet      = "BET",
   Win      = "WIN",
@@ -11,7 +11,7 @@ enum WagerTransactionKind {
   Rollback = "ROLLBACK",
 }
 
-enum WagerTransactionStatus {
+export enum WagerTransactionStatus {
   Pending          = "PENDING",            // aceita, ainda não aplicada
   PendingReference = "PENDING_REFERENCE",  // aguardando a transação referenciada
   Processed        = "PROCESSED",          // aplicada (terminal)
@@ -38,13 +38,6 @@ export enum FailureCode {
 
   // 4. Erros graves de infraestrutura (para status FAILED)
   InternalError = "INTERNAL_ERROR",
-}
-
-const validateEnum = <T extends Record<string, string | number>>(  
-  enumObject: T,
-  value: unknown
-): value is T[keyof T] => {
-  return Object.values(enumObject).includes(value as T[keyof T]);
 }
 
 export interface CreateWagerTransactionProps {
@@ -107,6 +100,10 @@ export class WagerTransaction {
 
     /** Nasce em PENDING. Valida a exigência de referência por kind. */
     static create(props: CreateWagerTransactionProps): WagerTransaction{
+      if (!props.id || !props.providerId || !props.externalTransactionId || !props.walletId || !props.playerId) {
+        throw new DomainError("INVALID_ID", "IDs obrigatórios da transação não foram informados");
+      }
+
       if((props.kind === WagerTransactionKind.Refund || props.kind === WagerTransactionKind.Rollback) 
         && !props.referenceExternalTransactionId
       ) {
@@ -146,7 +143,7 @@ export class WagerTransaction {
         state.roundId,
         state.gameId,
         state.kind,
-        state.money instanceof Money ? state.money : Money.from(state.money),
+        state.money instanceof Money ? state.money : Money.rehydrate(state.money),
         state.referenceExternalTransactionId,
         new Date(state.createdAt),
         state.status,
@@ -197,7 +194,7 @@ export class WagerTransaction {
     };
 
     affectsBalance(): boolean{
-      return this.kind === WagerTransactionKind.Loss
+      return this.kind !== WagerTransactionKind.Loss
     };      // false para LOSS
 
     requiresReference(): boolean{
@@ -214,13 +211,13 @@ export class WagerTransaction {
     ledgerDirectionFor(reference?: WagerTransaction): LedgerDirection{
       if(this.kind === WagerTransactionKind.Bet)
         return LedgerDirection.Debit;
-
-      if(this.kind in [WagerTransactionKind.Win, WagerTransactionKind.Refund, WagerTransactionKind.Opening])
+      
+      if([WagerTransactionKind.Win, WagerTransactionKind.Refund, WagerTransactionKind.Opening].includes(this.kind))
         return LedgerDirection.Credit;
 
       if(this.kind === WagerTransactionKind.Rollback) {
         if(!reference)
-          throw new DomainError("MISSING_REFERRENCE", "ROollback exige uma transação de referência para determinar a direção.");
+          throw new DomainError("MISSING_REFERENCE", "Rollback exige uma transação de referência para determinar a direção.");
 
         const refDirection = reference.ledgerDirectionFor();
 

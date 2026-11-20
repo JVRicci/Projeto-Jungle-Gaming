@@ -5,7 +5,7 @@ services:
       POSTGRES_USER: wager
       POSTGRES_PASSWORD: wager
       POSTGRES_DB: wager
-    ports:  ["5432:5432"]
+    ports: ["5433:5432"]
     volumes: [pgdata:/var/lib/postgresql/data]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U wager"]
@@ -22,7 +22,15 @@ services:
     volumes:
       - ./infra/localstack/init:/etc/localstack/init/ready.d:ro
     healthcheck:
-      test: ["CMD", "awslocal", "sqs", "get_queue_url", "--queue-name", "wager-events.fifo"]
+      test:
+        [
+          "CMD",
+          "awslocal",
+          "sqs",
+          "get-queue-url",
+          "--queue-name",
+          "wager-events.fifo",
+        ]
       interval: 3s
       timeout: 5s
       retries: 30
@@ -31,8 +39,8 @@ services:
     profiles: ["app"]
     build: .
     depends_on:
-      postgres: {condition: service_healthy}
-      localstack: {condition: service_healthy}
+      postgres: { condition: service_healthy }
+      localstack: { condition: service_healthy }
     environment:
       PORT: 3000
       DATABASE_URL: postgres://wager:wager@postgres:5432/wager

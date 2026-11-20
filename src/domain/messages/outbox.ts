@@ -1,3 +1,16 @@
+import { IntegrationEvent } from "./integration_event";
+
+export interface OutboxMessageState {
+  id: string;
+  aggregateId: string;
+  eventType: string;
+  payload: Record<string, unknown>;
+  occurredAt: string;
+  attempts: number;
+  nextAttemptAt?: string | undefined;
+  publishedAt?: string | undefined;
+}
+
 export class OutboxMessage {
   private constructor(
     public readonly id: string,
@@ -10,16 +23,58 @@ export class OutboxMessage {
     private _publishedAt?: Date,
   ) {}
 
-  static enqueue(event: IntegrationEvent<unknown>): OutboxMessage;
-  static rehydrate(state: OutboxMessageState): OutboxMessage;
+  static enqueue(event: IntegrationEvent<unknown>): OutboxMessage {
+    const json = event.toJSON();
+
+    return new OutboxMessage(
+      event.eventId,
+      event.aggregateId,
+      event.eventType,
+      json as unknown as Readonly<Record<string, unknown>>,
+      event.occurredAt,
+      0,
+      event.occurredAt,
+      undefined
+    )
+  };
+
+  static rehydrate(state: OutboxMessageState): OutboxMessage {
+    return new OutboxMessage(
+      state.id,
+      state.aggregateId,
+      state.eventType,
+      state.payload,
+      new Date(state.occurredAt),
+      state.attempts,
+      state.nextAttemptAt ? new Date(state.nextAttemptAt) : undefined,
+      state.publishedAt ? new Date(state.publishedAt) : undefined,
+    )
+  };
 
   get attempts(): number { return this._attempts; }
   get nextAttemptAt(): Date | undefined { return this._nextAttemptAt; }
   get publishedAt(): Date | undefined { return this._publishedAt; }
 
-  isPending(): boolean;
-  isDue(now: Date): boolean;
-  markPublished(at: Date): void;
+  isPending(): boolean {
+    return this._publishedAt === undefined
+  };
+
+  isDue(now: Date): boolean {
+    if(!this.isPending()) return false;
+    if(!this._nextAttemptAt) return true;
+    return this._nextAttemptAt.getTime() <= now.getTime();
+  };
+
+  markPublished(at: Date): void {
+    this._publishedAt = at
+  };
+
   /** incrementa attempts e calcula o próximo nextAttemptAt (backoff) */
-  scheduleRetry(now: Date): void;
+  scheduleRetry(now: Date): void{
+    this._attempts += 1;
+    
+    // Faz um backoff exponencial: verifica primeiro 1s, depois 2s, depois 3s, até o limite de 60s
+    const delaySeconds = Math.min(Math.pow(2, this._attempts), 60);
+    this._nextAttemptAt = new Date(now.getTime() + delaySeconds * 1000);
+  };
 }

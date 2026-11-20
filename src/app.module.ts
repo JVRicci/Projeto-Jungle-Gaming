@@ -1,5 +1,6 @@
+import { ClockService } from './health/clock_service';
+import { HealthController } from './health/health.controller';
 import { Module } from '@nestjs/common';
-import { ClockService, HealthController } from './health/health.controller';
 
 @Module({
     controllers: [HealthController],

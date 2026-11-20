@@ -1,11 +1,5 @@
 import { Controller, Get, Injectable } from '@nestjs/common';
-
-@Injectable()
-export class ClockService {
-    now(): Date {
-        return new Date();
-    }
-}
+import { ClockService } from './clock_service'; 
 
 @Controller('health')
 export class HealthController {

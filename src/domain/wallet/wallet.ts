@@ -91,13 +91,13 @@ export class Wallet {
     if(!money.isPositive()){
       throw new DomainError("INVALID_DEBIT_AMOUNT", "Valor de débito inválido");
     }
+
+    this.assertSameCurrency(money);
     
     if(this._balance.isLessThan(money)){
       throw new DomainError("INSUFFICIENT_FUNDS", "Saldo insuficiente para débito");
     }
     
-    this.assertSameCurrency(money);
-
     const balanceBefore = this._balance;
     const balanceAfter = this._balance.subtract(money);
 
