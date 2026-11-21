@@ -12,7 +12,7 @@ Foi adotada uma arquitetura em camadas inspirada em **Portas e Adaptadores (Hexa
 - `src/ports/`: contratos (interfaces) de persistência e transação (`UnitOfWork`, `WalletRepository`, `WagerTransactionRepository`, `InboxRepository`, `OutboxRepository`) + tokens `Symbol` para injeção de dependência no NestJS.
 - `src/application/`: orquestração de casos de uso (`CreateWalletUseCase`, `ProcessWagerTransactionUseCase`, `ReconcileWalletUseCase`), hash canônico (`canonicalPayloadHash`), helpers de erro PostgreSQL (`pg_errors.ts`), regras puras (`wager_rules.ts`) e Strategy por tipo de operação (`wager_strategies.ts`).
 - `src/database/`: adaptador de persistência com MikroORM 7 (`migrations/`, `entities/`, `mappers.ts`, `repositories/`, `database.module.ts`).
-- `src/http/`: camada HTTP NestJS (`WalletsController`, `WageringController`, `DomainExceptionFilter`, `ProviderAuthGuard`).
+- `src/http/`: camada HTTP NestJS (`WalletsController`, `WageringController`, `DomainExceptionFilter`, `ProviderAuthGuard`, `SwaggerController`, `openapi.spec.ts`).
 - `src/messaging/`: integração SQS FIFO e workers (`SqsWagerConsumer`, `OutboxPublisherWorker`, `PendingReferenceWorker`).
 - `src/observability/` e `src/health/`: `StructuredLogger`, `MetricsService`, `GET /metrics`, `GET /health/live` e `GET /health/ready`.
 
@@ -89,6 +89,8 @@ Foi adotada uma arquitetura em camadas inspirada em **Portas e Adaptadores (Hexa
 ## 5. Contratos, Erros, Observabilidade e Segurança
 
 ### 5.1 Contratos, `payloadHash` e Erros
+
+- **Documentação OpenAPI / Swagger (`GET /docs` e `GET /docs/openapi.json`):** especificação OpenAPI 3.0.3 declarada em `src/http/openapi.spec.ts`, mantendo os controllers e o domínio livres de decorators de documentação e sem dependências adicionais de Swagger acopladas ao NestJS 12.
 
 - Não foram criados contratos/interfaces desnecessários dentro de `src/domain/`; as portas vivem em `src/ports/` para inverter dependências na camada de aplicação.
 - Os erros de domínio são centralizados em `DomainError(code, message)`, simplificando o mapeamento nas bordas (API HTTP e Workers).
