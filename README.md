@@ -62,7 +62,7 @@ docker compose --profile app up --build
 | `bun run test:unit` | Executa os testes unitários (`src/`) |
 | `bun run test:integration` | Executa as suítes de integração e concorrência (Postgres + LocalStack reais) |
 | `bun run test` | Executa toda a suíte (unitários + integração) |
-| bun run test:load | Executa o teste de carga contra a API rodando (bun run start) |
+| `bun run test:load` | Executa o teste de carga contra a API rodando (bun run start) |
 
 ## Endpoints HTTP
 
