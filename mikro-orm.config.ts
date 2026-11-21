@@ -1,9 +1,11 @@
 import { defineConfig } from '@mikro-orm/postgresql';
 import { Migrator } from '@mikro-orm/migrations';
+import { ORM_ENTITIES } from './src/database/entities';
+
 
 export default defineConfig({
     clientUrl: process.env.DATABASE_URL,
-    entities: [],
+    entities: ORM_ENTITIES,
     // discovery: {
     //     warnWhenNoEntities: false,
     // },
