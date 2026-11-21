@@ -5,17 +5,44 @@ O banco é a principal fonte de acertividade para decisões da aplicação, cons
 Mesmo com mensagens repetidas, atrasadas ou processadas ao mesmo tempo, a API e seus dados devem continuar funcionando integralmente.
 
 ## 2. Desenho geral:
+- No projeto foi utilizada arquitetura em camadas, seprando o código com portas e adaptadors.
+    
+    -src/domain: comporta todos os dominios e seus testes, sendo o núcleo da aplicação. Nele encontramos dominios para Wallet, WalletLedgerEntry, WagerTransaction, InboxMessage, OutboxMessage além da classe responsável pelo tratamento dos erros de dominio
+
+    -src/ports: possui os contratos de persistência e transação, sendo eles: UnitOfWork, WalletRepository, WagerTransactionRepository, InboxRepository, OutboxRepository. Esses contratos fazem referência as entidades do banco de dados da aplicação
+
+    - src/database: armazena as entidades do banco e da ORM (MikroORM), além da migration responsável por gerar a estrutura do banco.
 
 ## 3. Modelo de Domínio e Persistência
-- Eu criei tabelas inteiramente baseadas nos dominios da aplicação, entretanto eu tomei algumas liberdades. 
 
-- wallets: UNIQUE (player_id, currency) impede carteiras duplicadas por moeda. CHECK (balance >= 0) bloqueia saldo negativo na camada do banco.
+- Estrutura do banco e por que MikroORM?
 
-- wallet_ledger_entries: UNIQUE (wallet_id, transaction_id) garante no máximo 1 lançamento por transação/carteira. CHECK (amount > 0) e trigger BEFORE UPDATE OR DELETE (trg_ledger_immutable) adciona imutabilidade (append-only).
+    - Devido a vaga ser focada em MikroORM, optei por ela ao invés de TypeORM. Além disso, foi uma escolha benéfica porque com ela há uma melhor oportunidade de implementar Mappers, o pattrern Unit of Work e também os Identities Maps de forma explicita. Junto a isso é possível executar transações de forma isolada devido ao EntityManager. Mas para mim uma das maiores vantagens é o suporte nativo ao pessimistic lock, o qual foi minha escolha para implementação de controle de concorrência.
 
-- wager_transactions: UNIQUE (provider_id, external_transaction_id) e UNIQUE (idempotency_key) + payload_hash garantem idempotência persistente e detecção de conflito; observed_balance preserva o saldo no instante do processamento ou  da rejeição. O índice único uq_wager_single_reversal (WHERE status = 'PROCESSED' AND kind IN ('REFUND', 'ROLLBACK')) impede reversão duplicada sem bloquear o registro de tentativas REJECTED. Sobre inclusão de idempotencia nessa tabela e não em uma dedicada, no tópico 6 explico melhor essa decisão
+    - No PostgreSQL, é composto em colunas NUMERIC(20, 2) (amount, balance, balance_before, balance_after, observed_balance) + currency VARCHAR(3).
 
-- inbox_messages / outbox_messages: PK composta (consumer_name, message_id) para eliminar duplicatas de consumo SQS e índice de pendentes para publicação assíncrona.
+    - Nas ORM entities, p.decimal('string') garante que valores monetários trafeguem sempre como string, nunca number/float.
+
+- Papel dos mappers:
+
+    - Os Mappers atuam como adaptadores entre o modelo relacional (*Record) e o domínio, chamando toJSON() na gravação e rehydrate() na leitura (sem revalidar regras de transição). Basicamente eles traduzem os dados vindos do banco dentro dos dominios
+
+    - Eu criei tabelas inteiramente baseadas nos dominios da aplicação, entretanto eu tomei algumas liberdades. 
+
+    - No domínio, Money é um Value Object imutável baseado em Decimal (com escala fixa de 2 casas) composto por { amount, currency }.
+
+    - wallets: UNIQUE (player_id, currency) impede carteiras duplicadas por moeda. CHECK (balance >= 0) bloqueia saldo negativo na camada do banco.
+
+    - wallet_ledger_entries: UNIQUE (wallet_id, transaction_id) garante que haverá no máximo 1 lançamento por transação/carteira. Enquanto CHECK (amount > 0) e trigger BEFORE UPDATE OR DELETE (trg_ledger_immutable) adciona imutabilidade (append-only).
+
+    - wager_transactions: UNIQUE (provider_id, external_transaction_id) e UNIQUE (idempotency_key) + payload_hash garantem idempotência persistente e detecção de conflito; observed_balance preserva o saldo no instante do processamento ou  da rejeição. O índice único uq_wager_single_reversal (WHERE status = 'PROCESSED' AND kind IN ('REFUND', 'ROLLBACK')) impede reversão duplicada sem bloquear o registro de tentativas REJECTED. Sobre inclusão de idempotencia nessa tabela e não em uma dedicada, no tópico 6 explico melhor essa decisão
+
+    - inbox_messages / outbox_messages: Primary key composta (consumer_name, message_id) para eliminar duplicatas de consumo SQS e índice de pendentes para publicação assíncrona.
+
+- Detalhes na modelagem dos repositórios:
+
+    - WalletRepository agrupa tanto Wallet quanto WalletLedgerEntry
+
 
 ## 4. Garantias Distribuídas
 
