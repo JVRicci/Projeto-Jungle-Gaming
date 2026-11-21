@@ -48,22 +48,23 @@ const betStrategy: WagerKindStrategy = {
 
 const winStrategy: WagerKindStrategy = {
     async evaluate({ repos, tx }) {
-        if (tx.referenceExternalTransactionId) {
-            const storedRef = await repos.wagerTransactions.findByProviderExternalId(
-                tx.providerId,
-                tx.referenceExternalTransactionId,
-            );
-            if (storedRef) {
-                const err = validateWinReference(tx, storedRef.transaction);
-                if (err) return { outcome: "REJECT", failureCode: err };
-                return {
-                    outcome: "PROCESS_WITH_BALANCE",
-                    direction: LedgerDirection.Credit,
-                    referenceTransactionId: storedRef.transaction.id,
-                };
-            }
+        if (!tx.referenceExternalTransactionId) {
+            return { outcome: "PROCESS_WITH_BALANCE", direction: LedgerDirection.Credit };
         }
-        return { outcome: "PROCESS_WITH_BALANCE", direction: LedgerDirection.Credit };
+        const storedRef = await repos.wagerTransactions.findByProviderExternalId(
+            tx.providerId,
+            tx.referenceExternalTransactionId,
+        );
+        if (isReferenceUnavailable(storedRef?.transaction)) {
+            return { outcome: "PENDING_REFERENCE" };
+        }
+        const err = validateWinReference(tx, storedRef!.transaction);
+        if (err) return { outcome: "REJECT", failureCode: err };
+        return {
+            outcome: "PROCESS_WITH_BALANCE",
+            direction: LedgerDirection.Credit,
+            referenceTransactionId: storedRef!.transaction.id,
+        };
     },
 };
 
@@ -86,7 +87,6 @@ const reversalStrategy: WagerKindStrategy = {
         const refTx = storedRef!.transaction;
         const alreadyReversed = await repos.wagerTransactions.hasProcessedReversal(
             refTx.id,
-            tx.kind as WagerTransactionKind.Refund | WagerTransactionKind.Rollback,
         );
         const refError = validateReversalReference(tx, refTx, alreadyReversed);
         if (refError) return { outcome: "REJECT", failureCode: refError };

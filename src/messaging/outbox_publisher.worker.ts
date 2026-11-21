@@ -3,6 +3,7 @@ import { Inject, Injectable, Optional, type OnModuleDestroy, type OnModuleInit }
 import { UNIT_OF_WORK, type UnitOfWork } from "../ports/unit_of_work.port";
 import { SQS_CLIENT } from "./sqs_client";
 import { MetricsService } from "../observability/metrics.service";
+import type { StructuredLogger } from "../observability/structured_logger";
 
 @Injectable()
 export class OutboxPublisherWorker implements OnModuleInit, OnModuleDestroy {
@@ -15,6 +16,7 @@ export class OutboxPublisherWorker implements OnModuleInit, OnModuleDestroy {
         @Inject(UNIT_OF_WORK) private readonly uow: UnitOfWork,
         @Inject(SQS_CLIENT) private readonly sqs: SQSClient,
         @Optional() private readonly metrics?: MetricsService,
+        @Optional() private readonly logger?: StructuredLogger
     ) {}
 
     onModuleInit(): void {
@@ -25,13 +27,9 @@ export class OutboxPublisherWorker implements OnModuleInit, OnModuleDestroy {
             this.running = true;
             this.inFlight = this.publishBatchOnce()
                 .catch((err) => {
-                    console.error(
-                        JSON.stringify({
-                            level: "error",
-                            event: "outbox_poll_error",
-                            message: err instanceof Error ? err.message : String(err),
-                        }),
-                    );
+                    this.logger?.error("outbox_poll_error", {
+                        reason: err instanceof Error ? err.name : "unknown",
+                    });
                 })
                 .finally(() => {
                     this.running = false;
@@ -72,16 +70,12 @@ export class OutboxPublisherWorker implements OnModuleInit, OnModuleDestroy {
                     msg.scheduleRetry(new Date());
                     await outbox.save(msg);
                     this.metrics?.recordRetry("outbox");
-                    console.error(
-                        JSON.stringify({
-                            level: "error",
-                            event: "outbox_publish_failed",
-                            outboxId: msg.id,
-                            eventType: msg.eventType,
-                            attempts: msg.attempts,
-                            message: err instanceof Error ? err.message : String(err),
-                        }),
-                    );
+                    this.logger?.error("outbox_publish_failed", {
+                        outboxId: msg.id,
+                        eventType: msg.eventType,
+                        attempts: msg.attempts,
+                        reason: err instanceof Error ? err.name : "unknown",
+                    });
                 }
             }
 

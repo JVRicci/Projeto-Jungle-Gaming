@@ -1,10 +1,9 @@
-import { LockMode } from "@mikro-orm/core";
 import { EntityManager } from "@mikro-orm/postgresql";
 import { Injectable } from "@nestjs/common";
 import {
     WagerTransactionStatus,
     type WagerTransaction,
-    type WagerTransactionKind,
+    WagerTransactionKind,
 } from "../../domain/wager/wager_transaction";
 import type {
     StoredWagerTransaction,
@@ -12,6 +11,7 @@ import type {
 } from "../../ports/wager_transaction.repository.port";
 import { WagerTransactionOrmEntity } from "../entities";
 import { WagerTransactionMapper } from "../mappers";
+import { type PendingReferenceItem } from "../../ports/wager_transaction.repository.port";
 
 @Injectable()
 export class MikroOrmWagerTransactionRepository implements WagerTransactionRepository {
@@ -40,27 +40,49 @@ export class MikroOrmWagerTransactionRepository implements WagerTransactionRepos
 
     async hasProcessedReversal(
         referenceTransactionId: string,
-        kind: WagerTransactionKind.Refund | WagerTransactionKind.Rollback,
     ): Promise<boolean> {
         const count = await this.em.count(WagerTransactionOrmEntity, {
             referenceTransactionId,
-            kind,
+            kind: { $in: [WagerTransactionKind.Refund, WagerTransactionKind.Rollback] },
             status: WagerTransactionStatus.Processed,
         });
         return count > 0;
     }
 
-    async findPendingReferences(limit: number): Promise<WagerTransaction[]> {
+    async findDuePendingReferences(now: Date, limit: number): Promise<PendingReferenceItem[]> {
         const rows = await this.em.find(
             WagerTransactionOrmEntity,
-            { status: WagerTransactionStatus.PendingReference },
             {
-                orderBy: { createdAt: "ASC" },
-                limit,
-                lockMode: LockMode.PESSIMISTIC_PARTIAL_WRITE,
+                status: WagerTransactionStatus.PendingReference,
+                $or: [{ referenceNextAttemptAt: null }, { referenceNextAttemptAt: { $lte: now } }],
             },
+            { orderBy: { createdAt: "ASC" }, limit },
         );
-        return rows.map((row) => WagerTransactionMapper.toDomain(row).transaction);
+        return rows.map((row) => ({
+            transaction: WagerTransactionMapper.toDomain(row).transaction,
+            referenceAttempts: row.referenceAttempts,
+        }));
+    }
+
+    async findPendingReferenceById(id: string): Promise<PendingReferenceItem | null> {
+        const row = await this.em.findOne(WagerTransactionOrmEntity, {
+            id,
+            status: WagerTransactionStatus.PendingReference,
+        });
+        return row
+            ? {
+                  transaction: WagerTransactionMapper.toDomain(row).transaction,
+                  referenceAttempts: row.referenceAttempts,
+              }
+            : null;
+    }
+
+    async scheduleReferenceRetry(id: string, attempts: number, nextAttemptAt: Date): Promise<void> {
+        await this.em.nativeUpdate(
+            WagerTransactionOrmEntity,
+            { id },
+            { referenceAttempts: attempts, referenceNextAttemptAt: nextAttemptAt },
+        );
     }
 
     async create(tx: WagerTransaction, observedBalance?: string): Promise<void> {

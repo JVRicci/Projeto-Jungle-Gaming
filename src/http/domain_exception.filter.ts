@@ -4,8 +4,10 @@ import {
     type ExceptionFilter,
     HttpException,
     HttpStatus,
+    Optional
 } from "@nestjs/common";
 import { DomainError } from "../domain/shared/domain-error";
+import type { StructuredLogger } from "../observability/structured_logger";
 
 const DOMAIN_ERROR_STATUS: Record<string, HttpStatus> = {
     WALLET_NOT_FOUND: HttpStatus.NOT_FOUND,
@@ -36,6 +38,9 @@ const TRANSIENT_CODES = new Set([
     "08003",
     "08006",
     "53300",
+    "40001", 
+    "40P01", 
+    "55P03"
 ]);
 
 function isTransientInfraError(err: unknown): boolean {
@@ -49,6 +54,8 @@ function isTransientInfraError(err: unknown): boolean {
 
 @Catch()
 export class DomainExceptionFilter implements ExceptionFilter {
+    constructor(@Optional() private readonly logger?: StructuredLogger) {}
+
     catch(exception: unknown, host: ArgumentsHost): void {
         const res = host.switchToHttp().getResponse<{
             status(code: number): { json(body: unknown): void };
@@ -73,13 +80,9 @@ export class DomainExceptionFilter implements ExceptionFilter {
             return;
         }
 
-        console.error(
-            JSON.stringify({
-                level: "error",
-                event: "unhandled_http_exception",
-                message: exception instanceof Error ? exception.message : String(exception),
-            }),
-        );
+        this.logger?.error("unhandled_http_exception", {
+            reason: exception instanceof Error ? exception.name : "unknown",
+        });
 
         res.status(HttpStatus.INTERNAL_SERVER_ERROR).json({
             code: "INTERNAL_ERROR",

@@ -58,7 +58,11 @@ export function validateWinReference(
     tx: WagerTransaction,
     ref: WagerTransaction,
 ): FailureCode | null {
+    if (ref.kind !== WagerTransactionKind.Bet) return FailureCode.InvalidReferenceKind;
+    if (ref.status !== WagerTransactionStatus.Processed) return FailureCode.InvalidReferenceKind;
+
     const sameScope =
+        ref.providerId === tx.providerId &&
         ref.playerId === tx.playerId &&
         ref.walletId === tx.walletId &&
         ref.roundId === tx.roundId &&

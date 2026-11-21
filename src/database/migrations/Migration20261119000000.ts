@@ -63,6 +63,8 @@ export class Migration20261119000000 extends Migration {
                 reference_external_transaction_id VARCHAR(100),
                 reference_transaction_id VARCHAR(36),
                 failure_code VARCHAR(50),
+                reference_attempts INT NOT NULL DEFAULT 0,
+                reference_next_attempt_at TIMESTAMPTZ,
                 created_at TIMESTAMPTZ NOT NULL,
                 processed_at TIMESTAMPTZ,
                 CONSTRAINT uq_wager_provider_external_tx UNIQUE (provider_id, external_transaction_id),
@@ -71,9 +73,9 @@ export class Migration20261119000000 extends Migration {
 
             CREATE INDEX idx_wager_ref ON wager_transactions (provider_id, reference_external_transaction_id);
 
-            CREATE INDEX idx_wager_pending_ref ON wager_transactions (status, created_at) WHERE status = 'PENDING_REFERENCE';
-
-            CREATE UNIQUE INDEX uq_wager_single_reversal ON wager_transactions (reference_transaction_id, kind)
+            CREATE INDEX idx_wager_pending_ref ON wager_transactions (reference_next_attempt_at, created_at) WHERE status = 'PENDING_REFERENCE';
+            
+            CREATE UNIQUE INDEX uq_wager_single_reversal ON wager_transactions (reference_transaction_id)
             WHERE status = 'PROCESSED'
             AND kind IN ('REFUND', 'ROLLBACK')
             AND reference_transaction_id IS NOT NULL;

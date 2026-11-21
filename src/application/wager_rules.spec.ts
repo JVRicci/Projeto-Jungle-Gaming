@@ -186,6 +186,7 @@ describe("wager_rules", () => {
     describe("validateWinReference", () => {
         it("aceita referência no mesmo escopo e rejeita rodada/player divergente", () => {
             const bet = makeTx({ kind: WagerTransactionKind.Bet, roundId: "round-1" });
+            bet.markProcessed(undefined, new Date());
             expect(
                 validateWinReference(
                     makeTx({ kind: WagerTransactionKind.Win, roundId: "round-1" }),

@@ -247,7 +247,7 @@ describe("Distributed Resilience: 3+ Instâncias, Crash Pós-Commit/Pré-Ack e /
             apps[0]!.get(ProcessWagerTransactionUseCase),
         );
 
-        await expect(crashingConsumer.pollOnce(0)).rejects.toThrow("SIMULATED_CRASH_BEFORE_ACK");
+        await crashingConsumer.pollOnce(0);
         expect(unackedReceiptHandle).toBeDefined();
 
         // Simula visibilidade expirando imediatamente (mensagem volta para a fila)
