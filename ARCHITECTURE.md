@@ -1,61 +1,163 @@
 ## 1. Objetivo
 
-A API tem como objetivo receber operações de apostas e atualizar carteiras sem duplicar movimentações. 
-O banco é a principal fonte de acertividade para decisões da aplicação, considerando saldo, transações e lançamentos.
-Mesmo com mensagens repetidas, atrasadas ou processadas ao mesmo tempo, a API e seus dados devem continuar funcionando integralmente.
+A API tem como objetivo receber operações de apostas e atualizar carteiras sem duplicar movimentações, perder eventos confirmados ou permitir saldo negativo. O banco de dados é a fonte da verdade para decisões da aplicação — considerando saldo, transações e lançamentos no ledger. Mesmo com mensagens repetidas, atrasadas, fora de ordem ou processadas simultaneamente por múltiplas instâncias, a aplicação e seus dados permanecem íntegros.
+
+<hr>
 
 ## 2. Desenho geral:
-1. No projeto foi utilizada arquitetura em camadas, seprando o código com portas e adaptadors.
+
+### 2. 1. Foi adotada uma arquitetura em camadas inspirada em Portas e Adaptadores (Hexagonal simplificada), mantendo o domínio puro e isolado de frameworks:
+
+    - src/domain/: núcleo puro da aplicação (sem decorators de NestJS ou MikroORM). Contém Money, Wallet, WalletLedgerEntry, WagerTransaction, InboxMessage, OutboxMessage, eventos de integração tipados (IntegrationEvent) e DomainError.
     
-    - src/domain: comporta todos os dominios e seus testes, sendo o núcleo da aplicação. Nele encontramos dominios para Wallet, WalletLedgerEntry, WagerTransaction, InboxMessage, OutboxMessage além da classe responsável pelo tratamento dos erros de dominio
+    - src/ports/: contratos (interfaces) de persistência e transação (UnitOfWork, WalletRepository, WagerTransactionRepository, InboxRepository, OutboxRepository) + tokens Symbol para injeção de dependência no NestJS.
+    
+    - src/application/: orquestração de casos de uso (CreateWalletUseCase, ProcessWagerTransactionUseCase, ReconcileWalletUseCase), hash canônico (canonicalPayloadHash), regras puras (wager_rules.ts) e Strategy por tipo de operação (wager_strategies.ts).
+    
+    - src/database/: adaptador de persistência com MikroORM 7 (migrations/, entities/, mappers.ts, repositories/, database.module.ts).
+    
+    - src/http/: camada HTTP NestJS (WalletsController, WageringController, DomainExceptionFilter, ProviderAuthGuard).
+    
+    - src/messaging/: integração SQS FIFO e workers (SqsWagerConsumer, OutboxPublisherWorker, PendingReferenceWorker).
+    
+    - src/observability/ e src/health/: StructuredLogger, MetricsService, GET /metrics, GET /health/live e GET /health/ready.
 
-    - src/ports: possui os contratos de persistência e transação, sendo eles: UnitOfWork, WalletRepository, WagerTransactionRepository, InboxRepository, OutboxRepository. Esses contratos fazem referência as entidades do banco de dados da aplicação
-
-    - src/database: armazena as entidades do banco e da ORM (MikroORM), além da migration responsável por gerar a estrutura do banco.
+<hr>
 
 ## 3. Modelo de Domínio e Persistência
 
-1. Estrutura do banco e por que MikroORM?
+### 3. 1. Escolha do MikroORM 7 e Mapeamento do Money
 
-    - Devido a vaga ser focada em MikroORM, optei por ela ao invés de TypeORM. Além disso, foi uma escolha benéfica porque com ela há uma melhor oportunidade de implementar Mappers, o pattrern Unit of Work e também os Identities Maps de forma explicita. Junto a isso é possível executar transações de forma isolada devido ao EntityManager. Mas para mim uma das maiores vantagens é o suporte nativo ao pessimistic lock, o qual foi minha escolha para implementação de controle de concorrência.
+    - Além do alinhamento com a stack do desafio, o MikroORM 7 foi escolhido por oferecer Data Mapper, Unit of Work e Identity Map explícitos, transações isoladas via em.transactional() e suporte nativo a LockMode.PESSIMISTIC_WRITE (FOR UPDATE) e LockMode.PESSIMISTIC_PARTIAL_WRITE (FOR UPDATE SKIP LOCKED).
 
-    - No PostgreSQL, é composto em colunas NUMERIC(20, 2) (amount, balance, balance_before, balance_after, observed_balance) + currency VARCHAR(3).
+    - As ORM entities utilizam defineEntity (API nativa do MikroORM 7) em vez de decorators @Entity(), mantendo src/domain/ 100% desacoplado do ORM.
 
-    - Nas ORM entities, p.decimal('string') garante que valores monetários trafeguem sempre como string, nunca number/float.
+    - No domínio, Money é um Value Object imutável baseado em Decimal (precisão 40, escala fixa de 2 casas decimais), decomposto por { amount, currency }.
+    
+    - No PostgreSQL, Money é decomposto em colunas NUMERIC(20, 2) (amount, balance, balance_before, balance_after, observed_balance) + currency VARCHAR(3). Nas ORM entities, p.decimal('string') garante que valores monetários trafeguem sempre como string, nunca number/float.
 
-2. Papel dos mappers:
+### 3. 2. Papel dos Mappers (src/database/mappers.ts)
 
-    - Os Mappers atuam como adaptadores entre o modelo relacional (*Record) e o domínio, chamando toJSON() na gravação e rehydrate() na leitura (sem revalidar regras de transição). Basicamente eles traduzem os dados vindos do banco dentro dos dominios
+    - Os Mappers atuam como adaptadores bidirecionais entre o modelo relacional (*Record) e o domínio: decompoem Money via toJSON() na gravação e reconstroem entidades via rehydrate() na leitura (sem revalidar regras de transição).
 
-    - Eu criei tabelas inteiramente baseadas nos dominios da aplicação, entretanto eu tomei algumas liberdades. 
+### 3. 3. Invariantes garantidas no schema do PostgreSQL
+    - wallets: UNIQUE (player_id, currency) impede carteiras duplicadas por moeda; CHECK (balance >= 0) impede saldo negativo na camada do banco.
 
-    - No domínio, Money é um Value Object imutável baseado em Decimal (com escala fixa de 2 casas) composto por { amount, currency }.
+    - wallet_ledger_entries: UNIQUE (wallet_id, transaction_id) garante no máximo 1 lançamento por transação/carteira; CHECK (amount > 0) e trigger BEFORE UPDATE OR DELETE (trg_ledger_immutable) garantem imutabilidade (append-only).
 
-    - wallets: UNIQUE (player_id, currency) impede carteiras duplicadas por moeda. CHECK (balance >= 0) bloqueia saldo negativo na camada do banco.
+    - wager_transactions: UNIQUE (provider_id, external_transaction_id) e UNIQUE (idempotency_key) + payload_hash garantem idempotência persistente e detecção de conflito; observed_balance preserva o saldo observado no instante da conclusão/rejeição; o índice único parcial uq_wager_single_reversal (WHERE status = 'PROCESSED' AND kind IN ('REFUND', 'ROLLBACK') AND reference_transaction_id IS NOT NULL) impede dupla reversão sem bloquear registros auditáveis REJECTED.
 
-    - wallet_ledger_entries: UNIQUE (wallet_id, transaction_id) garante que haverá no máximo 1 lançamento por transação/carteira. Enquanto CHECK (amount > 0) e trigger BEFORE UPDATE OR DELETE (trg_ledger_immutable) adciona imutabilidade (append-only).
+    - inbox_messages / outbox_messages: PK decomposta (consumer_name, message_id) para deduplicação de consumo SQS e índice idx_outbox_pending para publicação assíncrona.
 
-    - wager_transactions: UNIQUE (provider_id, external_transaction_id) e UNIQUE (idempotency_key) + payload_hash garantem idempotência persistente e detecção de conflito; observed_balance preserva o saldo no instante do processamento ou  da rejeição. O índice único uq_wager_single_reversal (WHERE status = 'PROCESSED' AND kind IN ('REFUND', 'ROLLBACK')) impede reversão duplicada sem bloquear o registro de tentativas REJECTED. Sobre inclusão de idempotencia nessa tabela e não em uma dedicada, no tópico 6 explico melhor essa decisão
+### 3. 4. Repositórios e Transições de Estado da WagerTransaction
+    
+    - WalletRepository agrupa o Aggregate Root Wallet e seu WalletLedgerEntry (expondo apenas appendLedgerEntry, reforçando append-only no contrato).
 
-    - inbox_messages / outbox_messages: Primary key composta (consumer_name, message_id) para eliminar duplicatas de consumo SQS e índice de pendentes para publicação assíncrona.
+    - A paginação do ledger (listLedgerEntries) usa cursor em Base64URL contendo (createdAt, id) ordenados DESC, garantindo estabilidade mesmo com múltiplos registros no mesmo milissegundo.
 
-3. Detalhes na modelagem dos repositórios:
+    - Transições válidas da WagerTransaction:
 
-    - WalletRepository agrupa tanto Wallet quanto WalletLedgerEntry
+    - PENDING → PROCESSED | REJECTED | PENDING_REFERENCE | FAILED
+    - PENDING_REFERENCE → PROCESSED | REJECTED | FAILED
+    - PROCESSED, REJECTED e FAILED são estados terminais (tentar transicioná-los lança DomainError("INVALID_TRANSACTION_STATE")).
 
+<hr>
 
 ## 4. Garantias Distribuídas
 
+### 4. 1. Estratégia Transacional (UnitOfWork)
+
+    - MikroOrmUnitOfWork.run(work) encapsula em.transactional(async (txEm) => ...), criando um EntityManager isolado para a transação SQL e entregando os repositórios (wallets, wagerTransactions, inbox, outbox) ligados ao mesmo txEm.
+    
+    - Garante atomicidade real: alteração de saldo, lançamento no ledger, gravação da transação, registro de inbox (quando SQS) e enfileiramento na outbox confirmam ou sofrem rollback juntos.
+
+### 4. 2. Controle de Concorrência (walletId)
+
+    - Unidade de concorrência: walletId (sem lock global — carteiras distintas executam em paralelo).
+
+    - Estratégia: Pessimistic Locking por linha da carteira via findByIdForUpdate(walletId) (LockMode.PESSIMISTIC_WRITE + refresh: true → SELECT ... FOR UPDATE).
+
+    - O lock é adquirido antes da checagem de idempotência para serializar tanto disputas de saldo quanto rajadas duplicadas na mesma hot wallet entre 3+ instâncias, evitando tempestades de retries. Um catch para violação de UNIQUE (23505) cobre ainda corridas raras entre wallets diferentes com mesma idempotency_key.
+
+    - A coluna version inicia em 1 na abertura da carteira (inclusive quando initialBalance > 0 com transação interna OPENING) e é incrementada exclusivamente pelo domínio em debit()/credit().
+
+### 4. 3. Processamento Assíncrono, Outbox e Referências Fora de Ordem
+    - SQS Consumer (SqsWagerConsumer): reutiliza o mesmo ProcessWagerTransactionUseCase da API HTTP, deduplica via inbox_messages na mesma transação e executa DeleteMessage (ack) somente após o commit no PostgreSQL.
+        - Erros de negócio → persistidos como REJECTED + ack.
+        - Erros permanentes de contrato/JSON → encaminhados para wager-transactions-dlq.fifo + ack.
+        - Erros transitórios de infra → sem ack, com backoff exponencial via ChangeMessageVisibility (min(2^receiveCount, 30)s) até o limite de 5 tentativas configurado na RedrivePolicy da fila.
+    
+    - Em SIGTERM, encerra o loop, conclui a mensagem em andamento ou devolve visibilidade (VisibilityTimeout: 0).
+    
+    - Transactional Outbox (OutboxPublisherWorker): múltiplas instâncias consomem lotes com LockMode.PESSIMISTIC_PARTIAL_WRITE (SELECT ... FOR UPDATE SKIP LOCKED), publicam em wager-events.fifo com MessageGroupId = aggregateId e MessageDeduplicationId = eventId, e aplicam backoff exponencial (scheduleRetry) em falhas de publicação.
+    
+    - Referências fora de ordem (PendingReferenceWorker): busca transações PENDING_REFERENCE com FOR UPDATE SKIP LOCKED, reavalia usando as mesmas WAGER_STRATEGIES / applyWagerDecision e, após o TTL configurável (PENDING_REF_TTL_MS, padrão 30000ms), finaliza como REJECTED com REFERENCE_TTL_EXPIRED publicando WagerTransactionRejected.
+<hr>
+
 ## 5. Contratos, Erros e Segurança
 
-1. Não incluí contratos nos domínios, pois contratos normalmente têm o objetivo de abstrair implementações e inverter dependências. Incluir isso adicionaria complexidade e polimorfismo sem necessidade para esses casos.
+### 5. 1. Contratos, payloadHash e Erros
+    
+    - Não foram criados contratos/interfaces desnecessários dentro de src/domain/; as portas vivem em src/ports/ para inverter dependências na camada de aplicação.
+    
+    - Os erros de domínio são centralizados em DomainError(code, message), simplificando o mapeamento nas bordas (API HTTP e Workers).
 
-2. Centralizei os erros de dominio em DomainError. O motivo disso foi evitar a criação de inumeras classes de tratamento de erro e permitir maior facildade de identificar erros pelas camadas externas, como a API e os Workers.
+    - Algoritmo de payloadHash (src/application/canonical_payload_hash.ts): seleciona exclusivamente os campos de negócio (providerId, externalTransactionId, playerId, walletId, roundId, gameId, kind, money: { amount, currency } e referenceExternalTransactionId), remove chaves undefined, ordena recursivamente todas as chaves do JSON e gera SHA-256 em hexadecimal (64 chars). Headers e metadados de transporte nunca entram no hash.
+    
+    - Mapeamento consistente de status HTTP (DomainExceptionFilter + Controllers):
+        - 200 OK / 201 Created — operação processada (PROCESSED, replay idempotente, consultas, criação de wallet)
+        - 202 Accepted — aceita aguardando referência (PENDING_REFERENCE)
+        - 400 Bad Request — payload, header Idempotency-Key, cursor ou valor monetário inválido
+        - 404 Not Found — wallet ou transação inexistente
+        - 409 Conflict — wallet duplicada ou IDEMPOTENCY_CONFLICT (mesma key com payload diferente)
+        - 422 Unprocessable Entity — rejeição por regra de negócio (status: "REJECTED" + failureCode)
+        - 503 Service Unavailable — falha transitória de banco/infraestrutura
+
+    - Taxonomia de FailureCode: separa erros de saldo (INSUFFICIENT_FUNDS para apostas vs REVERSAL_WOULD_CAUSE_NEGATIVE_BALANCE para reversões), referência (REFERENCE_NOT_FOUND, REFERENCE_TTL_EXPIRED, REFERENCE_ALREADY_SETTLED, REFERENCE_MISMATCH, INVALID_REFERENCE_KIND), dados (CURRENCY_MISMATCH, INVALID_AMOUNT, WALLET_NOT_FOUND) e infra (INTERNAL_ERROR).
+
+### 5. 2. Observabilidade
+
+    - Logs estruturados (12-Factor App): StructuredLogger emite JSON no stdout/stderr com correlationId, messageId, transactionId, walletId e providerId, sem registrar valores monetários ou payloads financeiros completos. A saída via stdout/stderr permite coleta nativa em containers por agentes como Fluent Bit / Filebeat → Elasticsearch sem depender de arquivos locais efêmeros.
+
+    - Métricas (GET /metrics): expõe transações por status, duplicatas detectadas, retries (SQS/Outbox), mensagens em DLQ, conflitos, divergências de reconciliação, outboxLag (contagem e idade da mensagem pendente mais antiga) e latência de processamento (count, avg, p50, p95).
+    
+    - Health checks: GET /health/live (processo vivo) e GET /health/ready (conectividade real com PostgreSQL e SQS).
+
+### 5. 3. Autenticação (Seção 2 do desafio)
+
+    - Conforme permitido na Seção 2, optou-se por não subir um Identity Provider externo neste timebox para priorizar correção financeira, concorrência e resiliência distribuída.
+    
+    - Ponto de extensão explícito: ProviderAuthGuard (src/http/provider_auth.guard.ts) está aplicado via @UseGuards(ProviderAuthGuard) nos controllers de negócio (WalletsController e WageringController), mantendo /health/live, /health/ready e /metrics abertos.
+    
+    - Desenho alvo para produção: integrar um IdP OIDC (como Keycloak ou Zitadel) emitindo tokens JWT via Client Credentials para cada provedor; o ProviderAuthGuard validaria assinatura JWKS, expiração e claim provider_id, garantindo que o provedor autenticado corresponda ao providerId do payload.
+<hr>
 
 ## 6. Decisões Arquiteturais (ADRs), Trade-offs e Limitações
 
-1. Em relação a idepotencia relacionada a tabela wager_transactions, optei por implementar a idepotency_key (usando constraint UNIQUE) e payload_hash. na própria tabela e não criar uma tabela dedicada. Inicialmente pensei em uma tabela dedicada por conta de reutilização para possíveis funcionalidades, mas devido ao escopo do projeto atual, centralizei nessa tabela. Além disso, agindo dessa forma, riscos de dessincronização são evitados, gera menos complexidade na tabela (pois teria um JOIN para SELECT e mais um INSERT)
+### 6. 1. Idempotência na tabela wager_transactions + observed_balance (sem tabela idempotency_keys separada):
 
-2. O motivo de eu utilizar porta especifica do PostgreSQL foi devido a uma limitação da minha maquina, por isso ela está com a porta 5433.
+    - Decisão: centralizar idempotency_key (UNIQUE), payload_hash e observed_balance na própria wager_transactions, evitando tabela duplicada, JOIN extra e risco de dessincronização quando transações PENDING_REFERENCE mudam de status assincronamente.
+    
+    - Trade-off / Limitação: requisições rejeitadas antes de existir uma transação persistível (como payload malformado ou walletId inexistente por conta da FK) não ficam cacheadas para replay — aceitável pois nunca alteram estado financeiro.
 
-3. Sobre centralizar erros de dominio em classe especifica, existe um trade-off: Como code hoje é string, o TypeScript não impede erro de digitação nem obriga o mapeamento HTTP a cobrir todos os códigos. É possivel evoluir no futuro com enum por exemplo
+### 6. 2. Pessimistic Locking (FOR UPDATE) por walletId:
+
+    - Decisão: serializar escritas concorrentes por carteira direto no PostgreSQL com LockMode.PESSIMISTIC_WRITE.
+    
+    - Trade-off: sob altíssima contenção numa única hot wallet, transações mantêm conexões do pool ocupadas enquanto aguardam o lock; para mitigar isso, nenhuma chamada externa (HTTP/SQS) ocorre dentro da UnitOfWork (eventos saem de forma assíncrona pela Transactional Outbox).
+
+### 6. 3. Reconciliação sem SQL raw (WalletRepository.calculateBalanceFromLedger):
+
+    - Decisão: manter 100% das consultas na API tipada do MikroORM, projetando apenas direction e amount e recalculando o saldo com Decimal.
+
+    - Trade-off / Limitação: em carteiras com centenas de milhares de lançamentos, carregar linhas em memória consome mais RAM/rede do que um SUM no PostgreSQL. Por estar encapsulado atrás da porta WalletRepository, migrar para leitura paginada em lotes ou agregação no banco é isolado e transparente para os use cases.
+
+### 6. 4. Centralização de erros em DomainError:
+
+    - Decisão: evitar proliferação de dezenas de subclasses de erro.
+    
+    - Trade-off: como code é string, o TypeScript não impede erro de digitação nem obriga exaustividade no mapeamento HTTP; evolução natural futura é tipar code com um enum ou união literal.
+
+### 6. 5. Porta configurável do PostgreSQL (POSTGRES_PORT):
+
+    - Decisão: o docker-compose.yml expõe ${POSTGRES_PORT:-5432}:5432, mantendo 5432 como padrão portável e permitindo sobrescrever (ex.: 5433) via .env local em máquinas que já possuem PostgreSQL nativo rodando na 5432.
