@@ -21,6 +21,8 @@ export const WagerTransactionOrmEntity = defineEntity({
         referenceExternalTransactionId: p.string().length(100).nullable(),
         referenceTransactionId: p.string().length(36).nullable(),
         failureCode: p.string().length(50).nullable(),
+        referenceAttempts: p.integer().default(0),
+        referenceNextAttemptAt: p.datetime().columnType('timestamptz').nullable(),
         createdAt: p.datetime().columnType('timestamptz'),
         processedAt: p.datetime().columnType('timestamptz').nullable(),
     },

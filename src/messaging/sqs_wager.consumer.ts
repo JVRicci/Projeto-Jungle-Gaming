@@ -6,13 +6,20 @@ import {
     type Message,
     type SQSClient,
 } from "@aws-sdk/client-sqs";
-import { Inject, Injectable, Optional, type OnModuleDestroy, type OnModuleInit } from "@nestjs/common";
+import {
+    Inject,
+    Injectable,
+    Optional,
+    type OnModuleDestroy,
+    type OnModuleInit,
+} from "@nestjs/common";
 import { ProcessWagerTransactionUseCase } from "../application/use-cases/process_wager_transaction.use_case";
 import type { MoneyProps } from "../domain/money/money";
 import { DomainError } from "../domain/shared/domain-error";
 import { WagerTransactionKind } from "../domain/wager/wager_transaction";
-import { SQS_CLIENT } from "./sqs_client";
 import { MetricsService } from "../observability/metrics.service";
+import { StructuredLogger } from "../observability/structured_logger";
+import { SQS_CLIENT } from "./sqs_client";
 
 interface SqsWagerEnvelope {
     messageId?: string;
@@ -44,6 +51,7 @@ export class SqsWagerConsumer implements OnModuleInit, OnModuleDestroy {
         @Inject(SQS_CLIENT) private readonly sqs: SQSClient,
         private readonly processWager: ProcessWagerTransactionUseCase,
         @Optional() private readonly metrics?: MetricsService,
+        @Optional() private readonly logger?: StructuredLogger,
     ) {}
 
     onModuleInit(): void {
@@ -63,13 +71,9 @@ export class SqsWagerConsumer implements OnModuleInit, OnModuleDestroy {
             try {
                 await this.pollOnce(5);
             } catch (err) {
-                console.error(
-                    JSON.stringify({
-                        level: "error",
-                        event: "sqs_poll_error",
-                        message: err instanceof Error ? err.message : String(err),
-                    }),
-                );
+                this.logger?.error("sqs_poll_error", {
+                    reason: err instanceof Error ? err.name : "unknown",
+                });
                 await Bun.sleep(1000);
             }
         }
@@ -94,13 +98,7 @@ export class SqsWagerConsumer implements OnModuleInit, OnModuleDestroy {
         for (const msg of messages) {
             if (this.stopping && msg.ReceiptHandle) {
                 // Devolve visibilidade imediatamente durante SIGTERM
-                await this.sqs.send(
-                    new ChangeMessageVisibilityCommand({
-                        QueueUrl: queueUrl,
-                        ReceiptHandle: msg.ReceiptHandle,
-                        VisibilityTimeout: 0,
-                    }),
-                );
+                await this.changeVisibilitySafely(queueUrl, msg.ReceiptHandle, 0);
                 continue;
             }
             await this.handleMessage(queueUrl, msg);
@@ -135,7 +133,12 @@ export class SqsWagerConsumer implements OnModuleInit, OnModuleDestroy {
             !VALID_KINDS.has(d.kind) ||
             !d?.money
         ) {
-            await this.sendToDlqAndAck(queueUrl, msg, "INVALID_ENVELOPE");
+            await this.sendToDlqAndAck(queueUrl, msg, "INVALID_ENVELOPE", {
+                correlationId: messageId,
+                messageId,
+                walletId: d?.walletId,
+                providerId: d?.providerId,
+            });
             return;
         }
 
@@ -163,54 +166,78 @@ export class SqsWagerConsumer implements OnModuleInit, OnModuleDestroy {
                 new DeleteMessageCommand({ QueueUrl: queueUrl, ReceiptHandle: receiptHandle }),
             );
 
-            console.log(
-                JSON.stringify({
-                    level: "info",
-                    event: "sqs_wager_processed",
-                    correlationId: messageId,
-                    messageId,
-                    transactionId: result.transactionId,
-                    walletId: d.walletId,
-                    providerId: d.providerId,
-                    status: result.status,
-                    idempotentReplay: result.idempotentReplay,
-                }),
-            );
+            this.logger?.info("sqs_wager_processed", {
+                correlationId: messageId,
+                messageId,
+                transactionId: result.transactionId,
+                walletId: d.walletId,
+                providerId: d.providerId,
+                status: result.status,
+                idempotentReplay: result.idempotentReplay,
+            });
         } catch (err) {
             // Erro permanente de contrato/domínio → DLQ + ack (não entra em retry infinito)
             if (err instanceof DomainError) {
-                await this.sendToDlqAndAck(queueUrl, msg, err.code);
-                return;
-            }
-            this.metrics?.recordRetry("sqs");
-
-            // Erro transitório infra e Postgres. NÃO dá ack, aplica backoff de visibilidade
-            const receiveCount = Number(msg.Attributes?.ApproximateReceiveCount ?? "1");
-            const backoffSeconds = Math.min(Math.pow(2, receiveCount), 30);
-            console.error(
-                JSON.stringify({
-                    level: "error",
-                    event: "sqs_wager_transient_error",
+                await this.sendToDlqAndAck(queueUrl, msg, err.code, {
                     correlationId: messageId,
                     messageId,
                     walletId: d.walletId,
                     providerId: d.providerId,
-                    receiveCount,
-                    backoffSeconds,
-                    message: err instanceof Error ? err.message : String(err),
-                }),
-            );
+                });
+                return;
+            }
+
+            // Erro transitório (infra/Postgres) → NÃO dá ack; aplica backoff de visibilidade
+            this.metrics?.recordRetry("sqs");
+            const receiveCount = Number(msg.Attributes?.ApproximateReceiveCount ?? "1");
+            const maxBackoff = Number(process.env.SQS_MAX_BACKOFF_SECONDS ?? 30);
+            const backoffSeconds = Math.min(2 ** receiveCount, maxBackoff);
+
+            this.logger?.error("sqs_wager_transient_error", {
+                correlationId: messageId,
+                messageId,
+                walletId: d.walletId,
+                providerId: d.providerId,
+                receiveCount,
+                backoffSeconds,
+                reason: err instanceof Error ? err.name : "unknown",
+            });
+
+            await this.changeVisibilitySafely(queueUrl, receiptHandle, backoffSeconds);
+        }
+    }
+
+    private async changeVisibilitySafely(
+        queueUrl: string,
+        receiptHandle: string,
+        seconds: number,
+    ): Promise<void> {
+        try {
             await this.sqs.send(
                 new ChangeMessageVisibilityCommand({
                     QueueUrl: queueUrl,
                     ReceiptHandle: receiptHandle,
-                    VisibilityTimeout: backoffSeconds,
+                    VisibilityTimeout: seconds,
                 }),
             );
+        } catch (err) {
+            this.logger?.warn("sqs_change_visibility_failed", {
+                reason: err instanceof Error ? err.name : "unknown",
+            });
         }
     }
 
-    private async sendToDlqAndAck(queueUrl: string, msg: Message, reason: string): Promise<void> {
+    private async sendToDlqAndAck(
+        queueUrl: string,
+        msg: Message,
+        reason: string,
+        meta?: {
+            correlationId?: string;
+            messageId?: string;
+            walletId?: string;
+            providerId?: string;
+        },
+    ): Promise<void> {
         const dlqUrl = process.env.SQS_WAGER_DLQ_URL;
         if (dlqUrl) {
             await this.sqs.send(
@@ -231,14 +258,13 @@ export class SqsWagerConsumer implements OnModuleInit, OnModuleDestroy {
                 new DeleteMessageCommand({ QueueUrl: queueUrl, ReceiptHandle: msg.ReceiptHandle }),
             );
         }
-        console.error(
-            JSON.stringify({
-                level: "error",
-                event: "sqs_message_sent_to_dlq",
-                messageId: msg.MessageId,
-                reason,
-            }),
-        );
+        this.logger?.error("sqs_message_sent_to_dlq", {
+            correlationId: meta?.correlationId ?? msg.MessageId,
+            messageId: meta?.messageId ?? msg.MessageId,
+            walletId: meta?.walletId,
+            providerId: meta?.providerId,
+            reason,
+        });
         this.metrics?.recordDlq();
     }
 }

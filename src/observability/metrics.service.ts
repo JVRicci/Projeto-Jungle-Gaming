@@ -92,6 +92,7 @@ export class MetricsService {
                         : Number((this.latencySumMs / this.latencyCount).toFixed(2)),
                 p50: percentile(50),
                 p95: percentile(95),
+                p99: percentile(99),
             },
         };
     }

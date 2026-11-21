@@ -1,6 +1,6 @@
 {
   "name": "projeto-jungle-gaming",
-  "module": "index.ts",
+  "module": "src/main.ts",
   "type": "module",
   "private": true,
   "scripts": {
@@ -12,7 +12,8 @@
     "migration:up": "bun run src/database/migrate.ts up",
     "migration:down": "bun run src/database/migrate.ts down",
     "test:unit": "bun test src/",
-    "test:integration": "bun test test/integration/database.integration.spec.ts && bun test test/integration/wallet_use_cases.integration.spec.ts && bun test test/integration/wager_processing.integration.spec.ts && bun test test/integration/http_api.integration.spec.ts && bun test test/integration/messaging.integration.spec.ts && bun test test/integration/distributed_resilience.integration.spec.ts",
+    "test:integration": "bun test test/integration/database.integration.spec.ts && bun test test/integration/wallet_use_cases.integration.spec.ts && bun test test/integration/wager_processing.integration.spec.ts && bun test test/integration/http_api.integration.spec.ts && bun test test/integration/messaging.integration.spec.ts && bun test test/integration/distributed_resilience.integration.spec.ts && bun test test/integration/migrations.integration.spec.ts && bun test test/integration/concurrency.integration.spec.ts",
+    "test:load": "bun run test/load/load_test.ts",
     "test": "bun run test:unit && bun run test:integration"
   },
   "devDependencies": {

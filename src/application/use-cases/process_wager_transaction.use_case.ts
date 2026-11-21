@@ -11,7 +11,7 @@ import {
     type UnitOfWork,
 } from "../../ports/unit_of_work.port";
 import { hashWagerPayload } from "../canonical_payload_hash";
-import { isUniqueConstraintError } from "../pg_errors";
+import { isLockConflictError, isUniqueConstraintError } from "../pg_errors";
 import { validateAgainstWallet } from "../wager_rules";
 import {
     WAGER_STRATEGIES,
@@ -67,7 +67,37 @@ export class ProcessWagerTransactionUseCase {
         let output: ProcessWagerTransactionOutput;
         try {
             output = await this.uow.run(async (repos) => {
+                const lockStart = performance.now();
                 const wallet = await repos.wallets.findByIdForUpdate(input.walletId);
+                if (performance.now() - lockStart > Number(process.env.LOCK_CONTENTION_THRESHOLD_MS ?? 25)) {
+                    this.metrics?.recordConflict("lock");
+                }
+
+                if(input.inbox) {
+                    const seen = await repos.inbox.findByKey(
+                        input.inbox.consumerName,
+                        input.inbox.messageId
+                    )
+
+                    if ( seen?. isProcessed()) {
+                        if (seen.payloadHash !== payloadHash) {
+                            this.metrics?.recordConflict("idempotency");
+                            throw new DomainError(
+                                "IDEMPOTENCY_CONFLICT",
+                                "messageid já consumido com payload diferente"
+                            )
+                        }
+                    }
+                    const original = await this.findExisting(repos, input);
+
+                    if(original) {
+                        return this.replayOf(
+                            original.transaction,
+                            original.observedBalance ?? wallet?.balance.toJSON().amount
+                        )
+                    }
+                }
+
 
                 const existing = await this.findExisting(repos, input);
                 if (existing) {
@@ -137,6 +167,7 @@ export class ProcessWagerTransactionUseCase {
                 this.metrics?.recordConflict("unique");
                 output = await this.handleRaceReplay(input, payloadHash);
             } else {
+                if (isLockConflictError(err)) this.metrics?.recordConflict("lock");
                 throw err;
             }
         }
@@ -190,6 +221,7 @@ export class ProcessWagerTransactionUseCase {
         input: ProcessWagerTransactionInput,
         payloadHash: string,
     ): Promise<ProcessWagerTransactionOutput> {
+        
         return this.uow.run(async (repos) => {
             const existing = await this.findExisting(repos, input);
             if (!existing) {
@@ -198,12 +230,16 @@ export class ProcessWagerTransactionUseCase {
             
             if (!existing.transaction.matchesPayload(payloadHash)) {
                 this.metrics?.recordConflict("idempotency");
-
+                
                 throw new DomainError(
                     "IDEMPOTENCY_CONFLICT",
                     "Idempotency-Key já utilizada com payload diferente",
                 );
             }
+            if(input.inbox) {
+                await this.markInboxProcessed(repos, input.inbox, payloadHash, new Date())
+            }
+
             return this.replayOf(existing.transaction, existing.observedBalance);
         });
     }

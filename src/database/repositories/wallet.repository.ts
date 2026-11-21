@@ -1,4 +1,5 @@
 import Decimal from "decimal.js";
+import { DomainError } from "../../domain/shared/domain-error";
 import { LockMode } from "@mikro-orm/core";
 import { EntityManager } from "@mikro-orm/postgresql";
 import { Injectable } from "@nestjs/common";
@@ -119,10 +120,20 @@ export class MikroOrmWalletRepository implements WalletRepository {
     }
 
     private decodeCursor(cursor: string): LedgerCursorPayload {
-        const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as Partial<LedgerCursorPayload>;
-        if (!parsed.createdAt || !parsed.id) {
-            throw new Error("Cursor de paginação inválido");
+        try {
+            const parsed = JSON.parse(
+                Buffer.from(cursor, "base64url").toString("utf8"),
+            ) as Partial<LedgerCursorPayload>;
+            if (
+                typeof parsed.createdAt !== "string" ||
+                typeof parsed.id !== "string" ||
+                Number.isNaN(Date.parse(parsed.createdAt))
+            ) {
+                throw new Error("shape");
+            }
+            return { createdAt: parsed.createdAt, id: parsed.id };
+        } catch {
+            throw new DomainError("INVALID_CURSOR", "Cursor de paginação inválido");
         }
-        return { createdAt: parsed.createdAt, id: parsed.id };
     }
 }

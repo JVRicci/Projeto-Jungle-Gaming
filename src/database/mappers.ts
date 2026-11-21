@@ -119,6 +119,8 @@ export const WagerTransactionMapper = {
             referenceExternalTransactionId: tx.referenceExternalTransactionId ?? null,
             referenceTransactionId: tx.referenceTransactionId ?? null,
             failureCode: tx.failureCode ?? null,
+            referenceAttempts: 0,
+            referenceNextAttemptAt: null,
             createdAt: tx.createdAt,
             processedAt: tx.processedAt ?? null,
         };

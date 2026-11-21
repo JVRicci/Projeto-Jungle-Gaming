@@ -16,6 +16,8 @@ export interface LogContext {
     checkedEntries?: number;
     reason?: string;
     message?: string;
+    outboxId?: string;
+    eventType?: string;
 }
 
 @Injectable()
