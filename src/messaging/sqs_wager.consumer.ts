@@ -6,12 +6,13 @@ import {
     type Message,
     type SQSClient,
 } from "@aws-sdk/client-sqs";
-import { Inject, Injectable, type OnModuleDestroy, type OnModuleInit } from "@nestjs/common";
+import { Inject, Injectable, Optional, type OnModuleDestroy, type OnModuleInit } from "@nestjs/common";
 import { ProcessWagerTransactionUseCase } from "../application/use-cases/process_wager_transaction.use_case";
 import type { MoneyProps } from "../domain/money/money";
 import { DomainError } from "../domain/shared/domain-error";
 import { WagerTransactionKind } from "../domain/wager/wager_transaction";
 import { SQS_CLIENT } from "./sqs_client";
+import { MetricsService } from "../observability/metrics.service";
 
 interface SqsWagerEnvelope {
     messageId?: string;
@@ -42,6 +43,7 @@ export class SqsWagerConsumer implements OnModuleInit, OnModuleDestroy {
     constructor(
         @Inject(SQS_CLIENT) private readonly sqs: SQSClient,
         private readonly processWager: ProcessWagerTransactionUseCase,
+        @Optional() private readonly metrics?: MetricsService,
     ) {}
 
     onModuleInit(): void {
@@ -180,8 +182,9 @@ export class SqsWagerConsumer implements OnModuleInit, OnModuleDestroy {
                 await this.sendToDlqAndAck(queueUrl, msg, err.code);
                 return;
             }
+            this.metrics?.recordRetry("sqs");
 
-            // Erro transitório (infra/Postgres) → NÃO dá ack; aplica backoff de visibilidade
+            // Erro transitório infra e Postgres. NÃO dá ack, aplica backoff de visibilidade
             const receiveCount = Number(msg.Attributes?.ApproximateReceiveCount ?? "1");
             const backoffSeconds = Math.min(Math.pow(2, receiveCount), 30);
             console.error(
@@ -236,5 +239,6 @@ export class SqsWagerConsumer implements OnModuleInit, OnModuleDestroy {
                 reason,
             }),
         );
+        this.metrics?.recordDlq();
     }
 }

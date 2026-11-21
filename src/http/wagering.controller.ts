@@ -8,6 +8,7 @@ import {
     Param,
     Post,
     Res,
+    UseGuards
 } from "@nestjs/common";
 import { ProcessWagerTransactionUseCase } from "../application/use-cases/process_wager_transaction.use_case";
 import type { MoneyProps } from "../domain/money/money";
@@ -19,6 +20,7 @@ import {
 } from "../domain/wager/wager_transaction";
 import { WAGER_TRANSACTION_REPOSITORY } from "../ports/unit_of_work.port";
 import type { WagerTransactionRepository } from "../ports/wager_transaction.repository.port";
+import { ProviderAuthGuard } from "./provider_auth.guard";
 
 interface SubmitWagerBody {
     providerId?: string;
@@ -35,6 +37,7 @@ interface SubmitWagerBody {
 const VALID_KINDS = new Set<string>(Object.values(WagerTransactionKind));
 
 @Controller()
+@UseGuards(ProviderAuthGuard)
 export class WageringController {
     constructor(
         private readonly processWager: ProcessWagerTransactionUseCase,

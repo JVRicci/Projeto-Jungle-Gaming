@@ -5,17 +5,17 @@ O banco é a principal fonte de acertividade para decisões da aplicação, cons
 Mesmo com mensagens repetidas, atrasadas ou processadas ao mesmo tempo, a API e seus dados devem continuar funcionando integralmente.
 
 ## 2. Desenho geral:
-- No projeto foi utilizada arquitetura em camadas, seprando o código com portas e adaptadors.
+1. No projeto foi utilizada arquitetura em camadas, seprando o código com portas e adaptadors.
     
-    -src/domain: comporta todos os dominios e seus testes, sendo o núcleo da aplicação. Nele encontramos dominios para Wallet, WalletLedgerEntry, WagerTransaction, InboxMessage, OutboxMessage além da classe responsável pelo tratamento dos erros de dominio
+    - src/domain: comporta todos os dominios e seus testes, sendo o núcleo da aplicação. Nele encontramos dominios para Wallet, WalletLedgerEntry, WagerTransaction, InboxMessage, OutboxMessage além da classe responsável pelo tratamento dos erros de dominio
 
-    -src/ports: possui os contratos de persistência e transação, sendo eles: UnitOfWork, WalletRepository, WagerTransactionRepository, InboxRepository, OutboxRepository. Esses contratos fazem referência as entidades do banco de dados da aplicação
+    - src/ports: possui os contratos de persistência e transação, sendo eles: UnitOfWork, WalletRepository, WagerTransactionRepository, InboxRepository, OutboxRepository. Esses contratos fazem referência as entidades do banco de dados da aplicação
 
     - src/database: armazena as entidades do banco e da ORM (MikroORM), além da migration responsável por gerar a estrutura do banco.
 
 ## 3. Modelo de Domínio e Persistência
 
-- Estrutura do banco e por que MikroORM?
+1. Estrutura do banco e por que MikroORM?
 
     - Devido a vaga ser focada em MikroORM, optei por ela ao invés de TypeORM. Além disso, foi uma escolha benéfica porque com ela há uma melhor oportunidade de implementar Mappers, o pattrern Unit of Work e também os Identities Maps de forma explicita. Junto a isso é possível executar transações de forma isolada devido ao EntityManager. Mas para mim uma das maiores vantagens é o suporte nativo ao pessimistic lock, o qual foi minha escolha para implementação de controle de concorrência.
 
@@ -23,7 +23,7 @@ Mesmo com mensagens repetidas, atrasadas ou processadas ao mesmo tempo, a API e 
 
     - Nas ORM entities, p.decimal('string') garante que valores monetários trafeguem sempre como string, nunca number/float.
 
-- Papel dos mappers:
+2. Papel dos mappers:
 
     - Os Mappers atuam como adaptadores entre o modelo relacional (*Record) e o domínio, chamando toJSON() na gravação e rehydrate() na leitura (sem revalidar regras de transição). Basicamente eles traduzem os dados vindos do banco dentro dos dominios
 
@@ -39,7 +39,7 @@ Mesmo com mensagens repetidas, atrasadas ou processadas ao mesmo tempo, a API e 
 
     - inbox_messages / outbox_messages: Primary key composta (consumer_name, message_id) para eliminar duplicatas de consumo SQS e índice de pendentes para publicação assíncrona.
 
-- Detalhes na modelagem dos repositórios:
+3. Detalhes na modelagem dos repositórios:
 
     - WalletRepository agrupa tanto Wallet quanto WalletLedgerEntry
 
@@ -48,14 +48,14 @@ Mesmo com mensagens repetidas, atrasadas ou processadas ao mesmo tempo, a API e 
 
 ## 5. Contratos, Erros e Segurança
 
-- Não incluí contratos nos domínios, pois contratos normalmente têm o objetivo de abstrair implementações e inverter dependências. Incluir isso adicionaria complexidade e polimorfismo sem necessidade para esses casos.
+1. Não incluí contratos nos domínios, pois contratos normalmente têm o objetivo de abstrair implementações e inverter dependências. Incluir isso adicionaria complexidade e polimorfismo sem necessidade para esses casos.
 
-- Centralizei os erros de dominio em DomainError. O motivo disso foi evitar a criação de inumeras classes de tratamento de erro e permitir maior facildade de identificar erros pelas camadas externas, como a API e os Workers.
+2. Centralizei os erros de dominio em DomainError. O motivo disso foi evitar a criação de inumeras classes de tratamento de erro e permitir maior facildade de identificar erros pelas camadas externas, como a API e os Workers.
 
 ## 6. Decisões Arquiteturais (ADRs), Trade-offs e Limitações
 
-- Em relação a idepotencia relacionada a tabela wager_transactions, optei por implementar a idepotency_key (usando constraint UNIQUE) e payload_hash. na própria tabela e não criar uma tabela dedicada. Inicialmente pensei em uma tabela dedicada por conta de reutilização para possíveis funcionalidades, mas devido ao escopo do projeto atual, centralizei nessa tabela. Além disso, agindo dessa forma, riscos de dessincronização são evitados, gera menos complexidade na tabela (pois teria um JOIN para SELECT e mais um INSERT)
+1. Em relação a idepotencia relacionada a tabela wager_transactions, optei por implementar a idepotency_key (usando constraint UNIQUE) e payload_hash. na própria tabela e não criar uma tabela dedicada. Inicialmente pensei em uma tabela dedicada por conta de reutilização para possíveis funcionalidades, mas devido ao escopo do projeto atual, centralizei nessa tabela. Além disso, agindo dessa forma, riscos de dessincronização são evitados, gera menos complexidade na tabela (pois teria um JOIN para SELECT e mais um INSERT)
 
-- O motivo de eu utilizar porta especifica do PostgreSQL foi devido a uma limitação da minha maquina, por isso ela está com a porta 5433.
+2. O motivo de eu utilizar porta especifica do PostgreSQL foi devido a uma limitação da minha maquina, por isso ela está com a porta 5433.
 
-- Sobre centralizar erros de dominio em classe especifica, existe um trade-off: Como code hoje é string, o TypeScript não impede erro de digitação nem obriga o mapeamento HTTP a cobrir todos os códigos. É possivel evoluir no futuro com enum por exemplo
+3. Sobre centralizar erros de dominio em classe especifica, existe um trade-off: Como code hoje é string, o TypeScript não impede erro de digitação nem obriga o mapeamento HTTP a cobrir todos os códigos. É possivel evoluir no futuro com enum por exemplo
