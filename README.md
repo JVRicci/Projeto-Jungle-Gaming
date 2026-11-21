@@ -64,6 +64,7 @@ docker compose --profile app up --build
 | `bun run test` | Executa toda a suíte (unitários + integração) |
 | `bun run test:load` | Executa o teste de carga contra a API rodando (bun run start) |
 
+
 ## Endpoints HTTP
 
 | Método | Rota | Descrição |
@@ -78,6 +79,7 @@ docker compose --profile app up --build
 | `GET` | `/health/live` | Liveness probe |
 | `GET` | `/health/ready` | Readiness probe (PostgreSQL e SQS) |
 | `GET` | `/metrics` | Métricas operacionais (status, duplicatas, retries, DLQ, conflitos, outbox lag, latência) |
+| `GET` | `/docs` | Documentação interativa Swagger UI (spec em `/docs/openapi.json`) |
 
 ## Exemplo rápido (curl)
 

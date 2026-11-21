@@ -7,10 +7,11 @@ import { DatabaseModule } from "../database/database.module";
 import { DomainExceptionFilter } from "./domain_exception.filter";
 import { WageringController } from "./wagering.controller";
 import { WalletsController } from "./wallets.controller";
+import { SwaggerController } from "./swagger.controller";
 
 @Module({
     imports: [DatabaseModule],
-    controllers: [WalletsController, WageringController],
+    controllers: [WalletsController, WageringController, SwaggerController],
     providers: [
         CreateWalletUseCase,
         ProcessWagerTransactionUseCase,
