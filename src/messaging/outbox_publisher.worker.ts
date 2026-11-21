@@ -1,7 +1,8 @@
 import { SendMessageCommand, type SQSClient } from "@aws-sdk/client-sqs";
-import { Inject, Injectable, type OnModuleDestroy, type OnModuleInit } from "@nestjs/common";
+import { Inject, Injectable, Optional, type OnModuleDestroy, type OnModuleInit } from "@nestjs/common";
 import { UNIT_OF_WORK, type UnitOfWork } from "../ports/unit_of_work.port";
 import { SQS_CLIENT } from "./sqs_client";
+import { MetricsService } from "../observability/metrics.service";
 
 @Injectable()
 export class OutboxPublisherWorker implements OnModuleInit, OnModuleDestroy {
@@ -13,6 +14,7 @@ export class OutboxPublisherWorker implements OnModuleInit, OnModuleDestroy {
     constructor(
         @Inject(UNIT_OF_WORK) private readonly uow: UnitOfWork,
         @Inject(SQS_CLIENT) private readonly sqs: SQSClient,
+        @Optional() private readonly metrics?: MetricsService,
     ) {}
 
     onModuleInit(): void {
@@ -69,6 +71,7 @@ export class OutboxPublisherWorker implements OnModuleInit, OnModuleDestroy {
                 } catch (err) {
                     msg.scheduleRetry(new Date());
                     await outbox.save(msg);
+                    this.metrics?.recordRetry("outbox");
                     console.error(
                         JSON.stringify({
                             level: "error",

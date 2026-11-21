@@ -9,6 +9,7 @@ import {
     Param,
     Post,
     Query,
+    UseGuards
 } from "@nestjs/common";
 import { CreateWalletUseCase } from "../application/use-cases/create_wallet.use_case";
 import { ReconcileWalletUseCase } from "../application/use-cases/reconcile_wallet.use_case";
@@ -16,6 +17,7 @@ import type { MoneyProps } from "../domain/money/money";
 import { DomainError } from "../domain/shared/domain-error";
 import { WALLET_REPOSITORY } from "../ports/unit_of_work.port";
 import type { WalletRepository } from "../ports/wallet.repository.port";
+import { ProviderAuthGuard } from "./provider_auth.guard";
 
 interface CreateWalletBody {
     playerId?: string;
@@ -23,6 +25,7 @@ interface CreateWalletBody {
 }
 
 @Controller("wallets")
+@UseGuards(ProviderAuthGuard)
 export class WalletsController {
     constructor(
         private readonly createWallet: CreateWalletUseCase,

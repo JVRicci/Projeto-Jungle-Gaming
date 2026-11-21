@@ -1,4 +1,6 @@
-import { Inject, Injectable } from "@nestjs/common";
+import { Inject, Injectable, Optional } from "@nestjs/common";
+import { MetricsService } from "../../observability/metrics.service";
+import { StructuredLogger } from "../../observability/structured_logger";
 import { InboxMessage } from "../../domain/messages/inbox";
 import { Money, type MoneyProps } from "../../domain/money/money";
 import { DomainError } from "../../domain/shared/domain-error";
@@ -37,9 +39,15 @@ export type ProcessWagerTransactionOutput = AppliedWagerResult;
 
 @Injectable()
 export class ProcessWagerTransactionUseCase {
-    constructor(@Inject(UNIT_OF_WORK) private readonly uow: UnitOfWork) {}
+    constructor(
+        @Inject(UNIT_OF_WORK) private readonly uow: UnitOfWork,
+        @Optional() private readonly metrics?: MetricsService,
+        @Optional() private readonly logger?: StructuredLogger,
+    ) {}
 
     async execute(input: ProcessWagerTransactionInput): Promise<ProcessWagerTransactionOutput> {
+        const startedAt = performance.now();
+        
         if (!input.idempotencyKey?.trim()) {
             throw new DomainError("MISSING_IDEMPOTENCY_KEY", "Idempotency-Key é obrigatória");
         }
@@ -56,13 +64,16 @@ export class ProcessWagerTransactionUseCase {
         const correlationId = input.correlationId ?? crypto.randomUUID();
         const now = new Date();
 
+        let output: ProcessWagerTransactionOutput;
         try {
-            return await this.uow.run(async (repos) => {
+            output = await this.uow.run(async (repos) => {
                 const wallet = await repos.wallets.findByIdForUpdate(input.walletId);
 
                 const existing = await this.findExisting(repos, input);
                 if (existing) {
                     if (!existing.transaction.matchesPayload(payloadHash)) {
+                        this.metrics?.recordConflict("idempotency")
+
                         throw new DomainError(
                             "IDEMPOTENCY_CONFLICT",
                             "Idempotency-Key já utilizada com payload diferente",
@@ -123,10 +134,26 @@ export class ProcessWagerTransactionUseCase {
             });
         } catch (err) {
             if (isUniqueConstraintError(err)) {
-                return this.handleRaceReplay(input, payloadHash);
+                this.metrics?.recordConflict("unique");
+                output = await this.handleRaceReplay(input, payloadHash);
+            } else {
+                throw err;
             }
-            throw err;
         }
+        const durationMs = Number((performance.now() - startedAt).toFixed(2));
+        this.metrics?.recordTransaction(output.status, durationMs, output.idempotentReplay);
+        this.logger?.info("wager_transaction_handled", {
+            correlationId,
+            messageId: input.inbox?.messageId,
+            transactionId: output.transactionId,
+            walletId: input.walletId,
+            providerId: input.providerId,
+            status: output.status,
+            failureCode: output.failureCode,
+            idempotentReplay: output.idempotentReplay,
+            durationMs,
+        });
+        return output;
     }
 
     private findExisting(repos: TransactionalRepositories, input: ProcessWagerTransactionInput) {
@@ -168,7 +195,10 @@ export class ProcessWagerTransactionUseCase {
             if (!existing) {
                 throw new DomainError("INTERNAL_ERROR", "Conflito inesperado ao processar transação");
             }
+            
             if (!existing.transaction.matchesPayload(payloadHash)) {
+                this.metrics?.recordConflict("idempotency");
+
                 throw new DomainError(
                     "IDEMPOTENCY_CONFLICT",
                     "Idempotency-Key já utilizada com payload diferente",
